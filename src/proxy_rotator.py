@@ -1,118 +1,144 @@
 import ipaddress
 import random
 import requests
+import typing
 
-from bs4 import BeautifulSoup as bs
-from typing import *
+from bs4 import BeautifulSoup as BS
+
+
+_URL_freexies = [
+    "https://sslproxies.org/",
+    "https://free-proxy-list.net/"
+]
+
+
+def is_valid_ipv4(address: str) -> bool:
+    try:
+        address = ipaddress.ip_address(address)
+        valid_ipv4 = isinstance(address, ipaddress.IPv4Address)
+
+        return valid_ipv4
+    except ValueError:
+        return False
 
 
 class ProxyRotator():
-    _STR_download: str = 'Downloading HTTPS proxies...'
+    _available: typing.Set[str]
+    _blocked: typing.Set[str]
+    _elite_only: bool
+    _https_only: bool
+    _ipv4_only: bool
+    _max_num_proxies: int
+    _selected: typing.Optional[str]
+    _verbose: bool
 
-    _URL_freexies: List[str] = [
-        'https://sslproxies.org/',
-        'https://free-proxy-list.net/'
-    ]
-
-    _blocked: Set[str]
-    _proxies: Set[str]
-    _proxy: Optional[str]
-    _n: int
-
-    def __init__(self, n: int = -1):
+    def __init__(
+        self, 
+        *, 
+        elite_only: bool = True,
+        https_only: bool = True,
+        ipv4_only: bool = True,
+        max_num_proxies: int = -1, 
+        verbose: bool = False
+    ):
+        self._available = set()
         self._blocked = set()
-        self._proxies = set()
-        self._proxy = None
-        self._n = n
+        self._elite_only = elite_only
+        self._https_only = https_only
+        self._ipv4_only = ipv4_only
+        self._max_num_proxies = max_num_proxies
+        self._selected = None
+        self._verbose = verbose
 
-        self._download()
+        self.rotate()
 
     @property
-    def blocked(self) -> Set[str]:
+    def blocked(self) -> typing.Set[str]:
         return self._blocked
 
     @property
-    def nproxies(self) -> int:
-        return len(self._proxies)
+    def available(self) -> typing.Set[str]:
+        return self._available
 
     @property
-    def proxies(self) -> Dict[str, str]:
-        if self._proxy is None:
-            return None
-            
-        return {'https': self._proxy}
+    def num_available(self) -> int:
+        return len(self._available)
 
     @property
-    def proxy(self) -> str:
-        return self._proxy
+    def selected(self) -> str:
+        return self._selected
 
-    @staticmethod
-    def is_https(text: str) -> bool:
-        if text is None:
-            return False
+    def rotate(self) -> None:
+        if self._selected is not None:
+            self._blocked.add(self._selected)
 
-        return text.lower() == 'yes'
+        self._download_and_pop()
 
-    @staticmethod
-    def is_valid_ipv4(address: str) -> bool:
-        try:
-            ip = ipaddress.ip_address(address)
+    def _is_valid_proxy(self, address: str, anonymity: str, https_support: str) -> bool:
+        if self._elite_only:
+            if anonymity != "elite proxy":
+                return False
 
-            return isinstance(ip,
-                              ipaddress.IPv4Address)
-        except ValueError:
-            return False
+        if self._https_only:
+            if https_support != "yes":
+                return False
 
-    def block(self):
-        self._blocked.add(self._proxy)
+        if self._ipv4_only:
+            if not is_valid_ipv4(address):
+                return False
 
-    def renew(self) -> Optional[str]:
-        if self.nproxies == 0:
-            print(self._STR_download)
+        return True
+
+    def _download_and_pop(self) -> None:
+        if self.num_available == 0:
             self._download()
 
-        if self.nproxies == 0:
-            self._proxy = None
-
-        self._proxy = self._proxies.pop()
-
-    def _download(self):
-        if self._n == 0:
+        if self.num_available == 0:
+            self._selected = None
             return
 
-        self._proxies.clear()
+        self._selected = self._available.pop()
 
-        for url in self._URL_freexies:
-            res  = requests.get(url) 
-            soup = bs(res.content, 'html5lib') 
+    def _download(self):
+        if self._max_num_proxies == 0:
+            return
 
-            # 1. Extract data from IP table
-            addresses = soup.findAll('td')[::8]
-            ports = soup.findAll('td')[1::8]
-            https = soup.findAll('td')[6::8]
+        if self._verbose:
+            message = "Downloading proxies..."
+            print(message)
 
-            # 2. Filter for IPv4 addresses only
-            addresses = [a for a in addresses
-                           if self.is_valid_ipv4(a.text)]
+        self._available.clear()
 
-            # 3. Zip IP, port and HTTPS data
-            proxies = list(zip(map(lambda x: x.text, addresses),
-                               map(lambda x: x.text, ports),
-                               map(lambda x: x.text, https)))
-            
-            # 4. a) Filter for HTTPS proxies only
-            #    b) Merge IP and port data
-            proxies = [a + ':' + p
-                           for a, p, h in proxies
-                           if self.is_https(h)]
+        for endpoint in _URL_freexies:
+            response = requests.get(endpoint) 
+            soup = BS(response.content, "html5lib")
 
-            self._proxies = self._proxies | set(proxies)
+            addresses = soup.findAll("td")[::8]
+            ports = soup.findAll("td")[1::8]
+            anonymities = soup.findAll("td")[4::8]
+            supports_https = soup.findAll("td")[6::8]
 
-        # Remove blacklisted proxies
-        self._proxies = self._proxies - self._blocked
+            available = list(zip(
+                map(lambda x: x.text.lower(), addresses),
+                map(lambda x: x.text.lower(), ports),
+                map(lambda x: x.text.lower(), anonymities),
+                map(lambda x: x.text.lower(), supports_https)
+            ))
 
-        if self._n > -1 \
-                and self.nproxies > self._n:
-            self._proxies = set(random.sample(
-                                    self._proxies,
-                                    self._n))
+            available = [
+                f"{address}:{port}" for address, port, anonymity, https_support in available
+                if self._is_valid_proxy(address, anonymity, https_support)
+            ]
+
+            self._available = self._available | set(available)
+
+        # It removes blocked proxies
+        self._available = self._available - self._blocked
+
+        abundance = self.num_available > self._max_num_proxies
+
+        if abundance and self._max_num_proxies > -1:
+            # FIXME: This conversion is highly inefficient
+            self._available = tuple(self._available)
+            self._available = random.sample(self._available, self._max_num_proxies)
+            self._available = set(self._available)
