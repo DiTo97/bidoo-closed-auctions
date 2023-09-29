@@ -1,3 +1,23 @@
+# TODOs
+# # caching
+# inmem_cache  # in-memory storage with available and blocked freexies
+# cache  # persistent storage with available and blocked freexies
+
+# # filtering
+# iso_alpha2_code  # country
+# anonimity  # none, anonymous, elite
+# secure  # HTTPS or not
+
+# # refereshing
+# t_refresh  # -1 or float
+
+# # check on refresh
+# For more info, see https://github.com/oxylabs/Rotating-Proxies-With-Python/blob/main/rotating_multiple_proxies_async.py
+# - asyncio
+# - https://ip.oxylabs.io/ip
+# add bad freexies to blocked
+
+
 import ipaddress
 import random
 import requests
